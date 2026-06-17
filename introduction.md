@@ -65,3 +65,10 @@ In other words:
 This project breaks the wall in practice.**
 
 They are complementary, not competing.
+
+### Hardware Focus
+
+This project is tuned for the Intel i7-7700HQ:
+
+Cache Line Awareness: The search window is set to 16 slots (64 bytes), ensuring the entire "Proximity Search" stays within a single L1/L2 cache fetch.
+L3 Saturation: The test size is kept under 6MB to model performance when the entire data structure resides in the processor's last-level cache.
