@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RTOA v0.20 - The Policy Lab</title>
+    <style>
+        body { font-family: 'Courier New', monospace; background: #050505; color: #0f0; padding: 20px; font-size: 12px; }
+        .control-panel { background: #111; border: 2px solid #0f0; padding: 15px; margin-bottom: 20px; }
+        textarea { width: 100%; height: 280px; background: #000; color: #0f0; border: 1px solid #333; font-family: monospace; padding: 10px; margin: 10px 0; font-size: 11px; }
+        button { width: 100%; padding: 15px; background: #0f0; color: #000; font-weight: bold; border: none; cursor: pointer; font-size: 1.1em; }
+        button:disabled { background: #050; color: #0a0; }
+        .progress-container { width: 100%; background: #222; height: 30px; margin: 15px 0; border: 1px solid #0f0; position: relative; }
+        #progress-bar { width: 0%; height: 100%; background: #0f0; transition: width 0.1s; }
+        #progress-text { position: absolute; width: 100%; text-align: center; color: #000; font-weight: bold; top: 6px; }
+        .results-scroll { overflow-x: auto; margin-top: 20px; border: 1px solid #333; }
+        table { width: 100%; border-collapse: collapse; background: #0a0a0a; }
+        th, td { border: 1px solid #333; padding: 8px; text-align: left; }
+        th { background: #222; position: sticky; top: 0; }
+        .best { background: #004400; font-weight: bold; color: #fff; }
+        .log { height: 100px; overflow-y: auto; background: #000; border: 1px solid #222; padding: 10px; margin-top: 10px; color: #888; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+<h1>RTOA v0.20: Policy Lab (Adaptive Window Engine)</h1>
+
+<div class="control-panel">
+    <label>Policy Injection (JSON Variants):</label>
+    <textarea id="json-config"></textarea>
+    <button id="runBtn" onclick="runPolicyLab()">Ignite Policy Lab</button>
+</div>
+
+<div class="progress-container">
+    <div id="progress-bar"></div>
+    <div id="progress-text">READY</div>
+</div>
+
+<div class="results-scroll">
+    <table id="results-table">
+        <thead>
+            <tr>
+                <th>Variant Label</th>
+                <th>Med (μs)</th>
+                <th>P99</th>
+                <th>StdDev</th>
+                <th>Avg Window</th>
+                <th>X-ing/1k</th>
+                <th>Healed</th>
+                <th>Check</th>
+            </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+    </table>
+</div>
+
+<div class="log" id="sys-log">System Ready. Awaiting Formula Injection...</div>
+
+<script id="worker-script" type="text/javascript-worker">
+    self.onmessage = function(e) {
+        const { variant, config, global, trialSeed, useSAB, sharedBuffer } = e.data;
+        const lot = useSAB ? new Int32Array(sharedBuffer) : new Int32Array(global.SIZE);
+        const vault = new Map();
+        const SIZE = global.SIZE;
+
+        // --- 1. PRE-COMPILE FORMULA ---
+        let policyFn;
+        try {
+            policyFn = new Function('w', 'success', 'fail', 'depth', 'success_count', 'fail_count', 'avg_depth', 'vacuum', 
+                `return Math.max(${variant.WINDOW_MIN}, Math.min(${variant.WINDOW_MAX}, Math.round(${variant.WINDOW_FORMULA})));`);
+        } catch(err) {
+            self.postMessage({ error: "Formula Syntax Error: " + err.message });
+            return;
+        }
+
+        // --- 2. LOCAL STATE ---
+        let w = variant.WINDOW_MIN || 16;
+        let success_count = 0, fail_count = 0;
+        let total_depth = 0, successful_probes = 0;
+        let window_sum = 0, total_ops = 0;
+
+        function mulberry32(a) {
+            return function() {
+                var t = a += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            }
+        }
+        const rand = mulberry32(trialSeed);
+        const getHash = (k) => (k % 10 === 0) ? (k % 100) : (k * 1337) % SIZE;
+
+        let samples = [];
+        let lineCrossings = 0, probes = 0, healed = 0, checksum = 0n;
+        let keys = [];
+
+        // --- 3. FILL ---
+        const fillCount = Math.floor(SIZE * global.LOAD);
+        for(let i=1; i<=fillCount; i++) {
+            let k = i; keys.push(k); let p = getHash(k);
+            let found = false;
+            // Adaptive Fill uses initial w
+            for(let s=0; s<w; s++) {
+                if(lot[(p+s)%SIZE] === 0) { lot[(p+s)%SIZE] = k; found = true; break; }
+            }
+            if(!found) vault.set(k, {hash: p, hot: 0});
+        }
+
+        // --- 4. BENCHMARK ---
+        const iterations = global.STEADY_OPS / global.BATCH_SIZE;
+        for (let b = 0; b < iterations; b++) {
+            // Churn
+            for(let c=0; c<global.CHURN; c++) {
+                let idx = Math.floor(rand() * keys.length);
+                let oldK = keys[idx];
+                let newK = 5000000 + c;
+                let pOld = getHash(oldK);
+                for(let s=0; s<variant.WINDOW_MAX; s++) { if(lot[(pOld+s)%SIZE] === oldK) { lot[(pOld+s)%SIZE] = 0; break; } }
+                vault.delete(oldK);
+                let pn = getHash(newK); let fn = false;
+                for(let s=0; s<w; s++) { if(lot[(pn+s)%SIZE] === 0) { lot[(pn+s)%SIZE] = newK; fn = true; break; } }
+                if(!fn) vault.set(newK, {hash: pn, hot: 0});
+                keys[idx] = newK;
+
+                // Repatriation (Vacuum)
+                if(global.VACUUM) {
+                    let vSize = vault.size;
+                    let vPressure = vSize / fillCount;
+                    for(let [vk, obj] of vault.entries()) {
+                        if(obj.hot >= 4) {
+                            for(let s=0; s<w; s++) {
+                                if(lot[(obj.hash+s)%SIZE] === 0) {
+                                    lot[(obj.hash+s)%SIZE] = vk; vault.delete(vk);
+                                    healed++; break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Timed Batch
+            let batch = [];
+            for(let i=0; i<global.BATCH_SIZE; i++) batch.push(keys[Math.floor(rand() * keys.length)]);
+            
+            let t0 = performance.now();
+            for (let k of batch) {
+                let p = getHash(k);
+                let found = false;
+                let depth = 0;
+                let startLine = p >> 4;
+
+                for (let s = 0; s < w; s++) {
+                    probes++;
+                    depth = s + 1;
+                    let idx = (p + s) % SIZE;
+                    if ((idx >> 4) !== startLine) lineCrossings++;
+                    if (lot[idx] === k) { found = true; break; }
+                }
+
+                // Update Brain
+                let success = (found && depth <= 2);
+                let fail = (!found);
+                if (found) {
+                    successful_probes++;
+                    total_depth += depth;
+                    success_count++; fail_count = 0;
+                } else {
+                    fail_count++; success_count = 0;
+                    let vEntry = vault.get(k); if(vEntry) vEntry.hot++;
+                }
+
+                let avg_depth = successful_probes > 0 ? total_depth / successful_probes : 1;
+                let vacuum = vault.size / fillCount;
+                
+                // Execute Adaptive Formula
+                w = policyFn(w, success, fail, depth, success_count, fail_count, avg_depth, vacuum);
+                
+                window_sum += w;
+                total_ops++;
+                checksum = ((checksum * 31n) + BigInt(k)) & ((1n << 64n) - 1n);
+            }
+            samples.push((performance.now() - t0) / global.BATCH_SIZE);
+        }
+        self.postMessage({ samples, lineCrossings, probes, healed, checksum: checksum.toString(), avgW: window_sum / total_ops });
+    };
+</script>
+
+<script>
+const LAB_SPEC = {
+    "VARIANTS": [
+        {
+            "label": "Adaptive-AIMD (Success<=2)",
+            "class": "RTOA-S",
+            "WINDOW_POLICY": "FORMULA",
+            "WINDOW_FORMULA": "success ? w-1 : w+1",
+            "WINDOW_MIN": 2,
+            "WINDOW_MAX": 32
+        },
+        {
+            "label": "Self-Calibrating (Avg-Depth)",
+            "class": "RTOA-S",
+            "WINDOW_POLICY": "FORMULA",
+            "WINDOW_FORMULA": "depth <= (avg_depth * 1.5) ? w-1 : w+2",
+            "WINDOW_MIN": 2,
+            "WINDOW_MAX": 32
+        },
+        {
+            "label": "Vacuum-Pressure-Response",
+            "class": "RTOA-S",
+            "WINDOW_POLICY": "FORMULA",
+            "WINDOW_FORMULA": "vacuum > 0.05 ? w+2 : (success ? w-1 : w)",
+            "WINDOW_MIN": 2,
+            "WINDOW_MAX": 64
+        }
+    ],
+    "GLOBAL_SETTINGS": {
+        "SIZE": 100000,
+        "LOAD": 0.95,
+        "TRIALS": 30,
+        "BATCH_SIZE": 5000,
+        "STEADY_OPS": 500000,
+        "CHURN": 200,
+        "VACUUM": true,
+        "SEED": 1337
+    }
+};
+
+const useSAB = typeof SharedArrayBuffer !== 'undefined';
+document.getElementById('json-config').value = JSON.stringify(LAB_SPEC, null, 4);
+
+function log(msg) {
+    const l = document.getElementById('sys-log');
+    l.innerText += `> ${msg}\n`;
+    l.scrollTop = l.scrollHeight;
+}
+
+async function runPolicyLab() {
+    const spec = JSON.parse(document.getElementById('json-config').value);
+    const btn = document.getElementById('runBtn');
+    const tbody = document.getElementById('results-body');
+    const bar = document.getElementById('progress-bar');
+    const txt = document.getElementById('progress-text');
+    
+    btn.disabled = true;
+    tbody.innerHTML = '';
+    log("Policy Lab Ignited. Compiling Formulas...");
+
+    const results = [];
+    const sharedBuffer = useSAB ? new SharedArrayBuffer(spec.GLOBAL_SETTINGS.SIZE * 4) : null;
+
+    for (let variant of spec.VARIANTS) {
+        log(`Experiment: ${variant.label}`);
+        let allSamples = [], totalCross = 0, totalProbes = 0, totalHealed = 0, lastCheck = "", totalW = 0;
+
+        for (let t = 0; t < spec.GLOBAL_SETTINGS.TRIALS; t++) {
+            const blob = new Blob([document.getElementById('worker-script').textContent], {type: 'text/javascript'});
+            const worker = new Worker(URL.createObjectURL(blob));
+
+            const trialResult = await new Promise(resolve => {
+                worker.onmessage = (e) => resolve(e.data);
+                worker.postMessage({ variant, config: variant, global: spec.GLOBAL_SETTINGS, trialSeed: spec.GLOBAL_SETTINGS.SEED + t, useSAB, sharedBuffer });
+            });
+
+            if(trialResult.error) { log(trialResult.error); btn.disabled = false; return; }
+
+            allSamples.push(...trialResult.samples);
+            totalCross += trialResult.lineCrossings;
+            totalProbes += trialResult.probes;
+            totalHealed += trialResult.healed;
+            totalW += trialResult.avgW;
+            lastCheck = trialResult.checksum;
+            worker.terminate();
+
+            let progress = ((results.length * spec.GLOBAL_SETTINGS.TRIALS + t) / (spec.VARIANTS.length * spec.GLOBAL_SETTINGS.TRIALS)) * 100;
+            bar.style.width = progress + "%";
+            txt.innerText = `${variant.label} | T:${t+1}`;
+            if(t % 5 === 0) await new Promise(r => setTimeout(r, 0));
+        }
+
+        allSamples.sort((a,b) => a-b);
+        const mean = allSamples.reduce((a,b) => a+b, 0) / allSamples.length;
+        results.push({
+            label: variant.label,
+            med: allSamples[Math.floor(allSamples.length * 0.5)],
+            p99: allSamples[Math.floor(allSamples.length * 0.99)],
+            std: Math.sqrt(allSamples.map(x => Math.pow(x-mean, 2)).reduce((a,b)=>a+b)/allSamples.length),
+            avgW: totalW / spec.GLOBAL_SETTINGS.TRIALS,
+            crossRate: (totalCross / (totalProbes / 1000)),
+            healed: totalHealed,
+            check: lastCheck.slice(-6)
+        });
+    }
+
+    results.sort((a, b) => a.p99 - b.p99);
+    tbody.innerHTML = results.map((r, idx) => `
+        <tr class="${idx === 0 ? 'best' : ''}">
+            <td>${r.label}</td>
+            <td>${(r.med * 1000).toFixed(3)}</td>
+            <td>${(r.p99 * 1000).toFixed(3)}</td>
+            <td>${(r.std * 1000).toFixed(3)}</td>
+            <td>${r.avgW.toFixed(2)}</td>
+            <td>${r.crossRate.toFixed(2)}</td>
+            <td>${r.healed}</td>
+            <td>${r.check}</td>
+        </tr>
+    `).join('');
+    
+    btn.disabled = false;
+    txt.innerText = "LAB WORK COMPLETE";
+}
+</script>
+</body>
+</html>

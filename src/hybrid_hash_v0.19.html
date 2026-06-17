@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RTOA v0.19 - Modular Architect</title>
+    <style>
+        body { font-family: 'Courier New', monospace; background: #050505; color: #0f0; padding: 20px; font-size: 12px; }
+        .control-panel { background: #111; border: 2px solid #0f0; padding: 15px; margin-bottom: 20px; }
+        textarea { width: 100%; height: 220px; background: #000; color: #0f0; border: 1px solid #333; font-family: monospace; padding: 10px; margin: 10px 0; }
+        button { width: 100%; padding: 15px; background: #0f0; color: #000; font-weight: bold; border: none; cursor: pointer; font-size: 1.1em; }
+        button:disabled { background: #050; color: #0a0; }
+        .progress-container { width: 100%; background: #222; height: 30px; margin: 15px 0; border: 1px solid #0f0; position: relative; }
+        #progress-bar { width: 0%; height: 100%; background: #0f0; transition: width 0.1s; }
+        #progress-text { position: absolute; width: 100%; text-align: center; color: #000; font-weight: bold; top: 6px; }
+        .results-scroll { overflow-x: auto; margin-top: 20px; border: 1px solid #333; }
+        table { width: 100%; border-collapse: collapse; background: #0a0a0a; }
+        th, td { border: 1px solid #333; padding: 8px; text-align: left; }
+        th { background: #222; position: sticky; top: 0; }
+        .s-row { color: #ffff00; }
+        .a-row { color: #ff00ff; }
+        .best { background: #004400; font-weight: bold; color: #fff; }
+        .log { height: 100px; overflow-y: auto; background: #000; border: 1px solid #222; padding: 10px; margin-top: 10px; color: #888; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+<h1>RTOA v0.19: Modular Architect (Policy Engine)</h1>
+
+<div class="control-panel">
+    <label>Modular Policy Configuration (JSON):</label>
+    <textarea id="json-config"></textarea>
+    <button id="runBtn" onclick="runModularSuite()">Ignite Modular Benchmark</button>
+</div>
+
+<div class="progress-container">
+    <div id="progress-bar"></div>
+    <div id="progress-text">READY</div>
+</div>
+
+<div class="results-scroll">
+    <table id="results-table">
+        <thead>
+            <tr>
+                <th>Class</th>
+                <th>Window/Stride</th>
+                <th>Med (μs)</th>
+                <th>P99</th>
+                <th>StdDev</th>
+                <th>X-ing/1k</th>
+                <th>Healed</th>
+                <th>ROI</th>
+                <th>Check</th>
+            </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+    </table>
+</div>
+
+<div class="log" id="sys-log">System Initialized. Modular Policy Engine Standby.</div>
+
+<script id="worker-script" type="text/javascript-worker">
+    self.onmessage = function(e) {
+        const { config, trialSeed, useSAB, sharedBuffer, modelType } = e.data;
+        const lot = useSAB ? new Int32Array(sharedBuffer) : new Int32Array(config.SIZE);
+        const vault = new Map();
+        const SIZE = config.SIZE;
+        
+        function mulberry32(a) {
+            return function() {
+                var t = a += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            }
+        }
+        const rand = mulberry32(trialSeed);
+        const getHash = (k) => (k % 10 === 0) ? (k % 100) : (k * 1337) % SIZE;
+
+        let samples = [];
+        let totalProbes = 0;
+        let lineCrossings = 0;
+        let healed = 0;
+        let checksum = 0n;
+        let keys = [];
+
+        // 1. Modular Initial Fill
+        for(let i=1; i<Math.floor(SIZE*config.LOAD); i++) {
+            let k = i; keys.push(k); let p = getHash(k);
+            let found = false;
+            
+            if (modelType === 'RTOA-S') {
+                for(let s=0; s<config.S_WINDOW; s++) {
+                    if(lot[(p+s)%SIZE] === 0) { lot[(p+s)%SIZE] = k; found = true; break; }
+                }
+            } else {
+                // RTOA-A logic
+                for(let s=0; s<config.A_PHASE1; s++) {
+                    if(lot[(p+s)%SIZE] === 0) { lot[(p+s)%SIZE] = k; found = true; break; }
+                }
+                if(!found) {
+                    for(let s=config.A_PHASE1 + 1; s < config.A_PHASE2; s += config.STRIDE) {
+                        if(lot[(p+s)%SIZE] === 0) { lot[(p+s)%SIZE] = k; found = true; break; }
+                    }
+                }
+            }
+            if(!found) vault.set(k, {hash: p, hot: 0});
+        }
+
+        const iterations = config.STEADY_OPS / config.BATCH_SIZE;
+        for (let b = 0; b < iterations; b++) {
+            // Churn simulation
+            for(let c=0; c<config.CHURN; c++) {
+                let idx = Math.floor(rand() * keys.length);
+                let oldK = keys[idx];
+                let newK = 4000000 + c;
+                // Delete
+                let pOld = getHash(oldK);
+                let delRange = (modelType === 'RTOA-S') ? config.S_WINDOW : config.A_PHASE2;
+                for(let s=0; s<delRange; s++) { if(lot[(pOld+s)%SIZE] === oldK) { lot[(pOld+s)%SIZE] = 0; break; } }
+                vault.delete(oldK);
+                // Insert
+                let pn = getHash(newK); let fn = false;
+                for(let s=0; s<8; s++) { if(lot[(pn+s)%SIZE] === 0) { lot[(pn+s)%SIZE] = newK; fn = true; break; } }
+                if(!fn) vault.set(newK, {hash: pn, hot: 0});
+                keys[idx] = newK;
+
+                // VACUUM with modular nozzle
+                if(config.VACUUM_ACTIVE) {
+                    for(let [vk, obj] of vault.entries()) {
+                        if(obj.hot >= config.HOT_THRESHOLD) {
+                            let vRange = (modelType === 'RTOA-S') ? config.S_WINDOW : config.A_PHASE2;
+                            for(let s=0; s<vRange; s++) {
+                                if(lot[(obj.hash+s)%SIZE] === 0) {
+                                    lot[(obj.hash+s)%SIZE] = vk; vault.delete(vk);
+                                    healed++; break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Batched Retrieval
+            let batch = [];
+            for(let i=0; i<config.BATCH_SIZE; i++) batch.push(keys[Math.floor(rand() * keys.length)]);
+            
+            let t0 = performance.now();
+            for (let k of batch) {
+                let p = getHash(k);
+                let found = false;
+                let startLine = p >> 4;
+                let range = (modelType === 'RTOA-S') ? config.S_WINDOW : config.A_PHASE2;
+
+                for (let s = 0; s < range; s++) {
+                    totalProbes++;
+                    let idx = (p + s) % SIZE;
+                    if ((idx >> 4) !== startLine) lineCrossings++;
+                    if (lot[idx] === k) { found = true; break; }
+                }
+                if(!found) {
+                    let vEntry = vault.get(k); if(vEntry) vEntry.hot++;
+                }
+                checksum = ((checksum * 31n) + BigInt(k)) & ((1n << 64n) - 1n);
+            }
+            samples.push((performance.now() - t0) / config.BATCH_SIZE);
+        }
+        self.postMessage({ samples, lineCrossings, totalProbes, healed, checksum: checksum.toString() });
+    };
+</script>
+
+<script>
+const DEFAULTS = {
+    SIZE: 100000,
+    LOAD: 0.95,
+    TRIALS: 50,
+    BATCH_SIZE: 5000,
+    STEADY_OPS: 500000,
+    STRIDE: 7,
+    ENABLED_MODELS: ["RTOA-S", "RTOA-A"],
+    S_WINDOW: 16,
+    A_PHASE1: 8,
+    A_PHASE2: 32,
+    VACUUM_ACTIVE: true,
+    HOT_THRESHOLD: 4,
+    CHURN: 200,
+    SEED: 1337
+};
+
+const useSAB = typeof SharedArrayBuffer !== 'undefined';
+document.getElementById('json-config').value = JSON.stringify(DEFAULTS, null, 4);
+
+function log(msg) {
+    const l = document.getElementById('sys-log');
+    l.innerText += `> ${msg}\n`;
+    l.scrollTop = l.scrollHeight;
+}
+
+async function runModularSuite() {
+    const config = JSON.parse(document.getElementById('json-config').value);
+    const btn = document.getElementById('runBtn');
+    const tbody = document.getElementById('results-body');
+    const bar = document.getElementById('progress-bar');
+    const txt = document.getElementById('progress-text');
+    
+    btn.disabled = true;
+    tbody.innerHTML = '';
+    log(useSAB ? "MODE: Atomic Shared Memory" : "MODE: Independent Cache Fallback");
+
+    const results = [];
+
+    for (let modelType of config.ENABLED_MODELS) {
+        log(`Benchmarking ${modelType}...`);
+        let allSamples = [];
+        let totalCrossings = 0;
+        let totalProbes = 0;
+        let totalHealed = 0;
+        let lastCheck = "";
+
+        const sharedBuffer = useSAB ? new SharedArrayBuffer(config.SIZE * 4) : null;
+
+        for (let t = 0; t < config.TRIALS; t++) {
+            const blob = new Blob([document.getElementById('worker-script').textContent], {type: 'text/javascript'});
+            const worker = new Worker(URL.createObjectURL(blob));
+
+            const trialResult = await new Promise(resolve => {
+                worker.onmessage = (e) => resolve(e.data);
+                worker.postMessage({
+                    config, sharedBuffer, modelType, useSAB,
+                    trialSeed: config.SEED + t
+                });
+            });
+
+            allSamples.push(...trialResult.samples);
+            totalCrossings += trialResult.lineCrossings;
+            totalProbes += trialResult.totalProbes;
+            totalHealed += trialResult.healed;
+            lastCheck = trialResult.checksum;
+            worker.terminate();
+
+            let progress = ((results.length * config.TRIALS + t) / (config.ENABLED_MODELS.length * config.TRIALS)) * 100;
+            bar.style.width = progress + "%";
+            txt.innerText = `${modelType} | T:${t+1}/${config.TRIALS}`;
+            if(t % 5 === 0) await new Promise(r => setTimeout(r, 0));
+        }
+
+        allSamples.sort((a,b) => a-b);
+        const mean = allSamples.reduce((a,b) => a+b, 0) / allSamples.length;
+        results.push({
+            type: modelType,
+            label: modelType === 'RTOA-S' ? `W:${config.S_WINDOW}` : `P1:${config.A_PHASE1} P2:${config.A_PHASE2} S:${config.STRIDE}`,
+            med: allSamples[Math.floor(allSamples.length * 0.5)],
+            p99: allSamples[Math.floor(allSamples.length * 0.99)],
+            std: Math.sqrt(allSamples.map(x => Math.pow(x-mean, 2)).reduce((a,b)=>a+b)/allSamples.length),
+            crossRate: (totalCrossings / (totalProbes / 1000)),
+            healed: totalHealed,
+            check: lastCheck.slice(-6)
+        });
+    }
+
+    results.sort((a, b) => a.p99 - b.p99);
+    tbody.innerHTML = results.map((r, idx) => `
+        <tr class="${r.type === 'RTOA-S' ? 's-row' : 'a-row'} ${idx === 0 ? 'best' : ''}">
+            <td>${r.type}</td><td>${r.label}</td>
+            <td>${(r.med * 1000).toFixed(3)}</td><td>${(r.p99 * 1000).toFixed(3)}</td>
+            <td>${(r.std * 1000).toFixed(3)}</td><td>${r.crossRate.toFixed(2)}</td>
+            <td>${r.healed}</td><td>--</td><td>${r.check}</td>
+        </tr>
+    `).join('');
+    
+    btn.disabled = false;
+    txt.innerText = "SWEEP COMPLETE";
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hybrid Hashing v0.11 - Economic Recovery</title>
+    <style>
+        body { font-family: 'Segoe UI', monospace; background: #050505; color: #0f0; padding: 20px; }
+        .stats { background: #111; padding: 20px; border: 1px solid #0f0; margin-bottom: 20px; display: flex; gap: 15px; }
+        .column { flex: 1; padding: 15px; border: 1px solid #222; border-radius: 8px; background: #0a0a0a; }
+        .metric { font-size: 1.1em; margin: 8px 0; border-bottom: 1px solid #111; padding-bottom: 4px; }
+        .title { font-weight: bold; font-size: 1.2em; margin-bottom: 12px; color: #fff; text-transform: uppercase; }
+        .v09 { border-top: 4px solid #ffff00; }
+        .v10 { border-top: 4px solid #ff00ff; }
+        button { padding: 20px; background: #0f0; color: #000; font-weight: bold; cursor: pointer; width: 100%; border: none; border-radius: 5px; }
+        .highlight { color: #fff; font-weight: bold; }
+        .recovery { color: #00ff00; font-size: 1.2em; }
+    </style>
+</head>
+<body>
+
+<h1>Krapivin-Yao Hybrid v0.11</h1>
+<p>The Economic Payoff: Does the Stepped Model (v0.10) Heal Better than v0.09?</p>
+
+<div class="stats">
+    <div class="column v09">
+        <div class="title">Hybrid v0.09</div>
+        <div id="v09-res">--</div>
+    </div>
+    <div class="column v10">
+        <div class="title">Stepped v0.10</div>
+        <div id="v10-res">--</div>
+    </div>
+</div>
+
+<button id="runBtn" onclick="runDynamicBattle()">Execute Recovery Battle</button>
+
+<script>
+const SIZE = 100000; 
+const LOAD = 0.95;
+const WINDOW_V09 = 16;
+const P1_LIMIT = 8;
+const P2_LIMIT = 32;
+
+let lotV09 = new Uint32Array(SIZE);
+let lotV10 = new Uint32Array(SIZE);
+let vaultV09 = new Map();
+let vaultV10 = new Map();
+
+function getHash(i) {
+    if (i % 10 === 0) return (i % 100); 
+    return (i * 1337) % SIZE;
+}
+
+async function runDynamicBattle() {
+    const btn = document.getElementById("runBtn");
+    btn.disabled = true;
+    
+    try {
+        lotV09.fill(0); lotV10.fill(0); vaultV09.clear(); vaultV10.clear();
+        let fillCount = Math.floor(SIZE * LOAD);
+        let keys = [];
+
+        // 1. INITIAL FILL
+        for (let i = 1; i <= fillCount; i++) {
+            let p = getHash(i);
+            keys.push(i);
+            // v0.09
+            let f09 = false;
+            for(let s=0; s<WINDOW_V09; s++) {
+                if(lotV09[(p+s)%SIZE] === 0) { lotV09[(p+s)%SIZE] = i; f09 = true; break; }
+            }
+            if(!f09) vaultV09.set(i, p);
+            // v10
+            let f10 = false;
+            for(let s=0; s < P1_LIMIT; s++) { if(lotV10[(p+s)%SIZE] === 0) { lotV10[(p+s)%SIZE] = i; f10 = true; break; } }
+            if(!f10) { for(let s=P1_LIMIT + 1; s < P2_LIMIT; s += 2) { if(lotV10[(p+s)%SIZE] === 0) { lotV10[(p+s)%SIZE] = i; f10 = true; break; } } }
+            if(!f10) vaultV10.set(i, p);
+        }
+
+        // 2. THE CHURN (Delete 20% to create holes)
+        for(let i=0; i<20000; i++) {
+            let k = keys[i];
+            let p = getHash(k);
+            // Delete in 09
+            for(let s=0; s<WINDOW_V09; s++) { if(lotV09[(p+s)%SIZE] === k) { lotV09[(p+s)%SIZE] = 0; break; } }
+            // Delete in 10
+            for(let s=0; s<P2_LIMIT; s++) { if(lotV10[(p+s)%SIZE] === k) { lotV10[(p+s)%SIZE] = 0; break; } }
+        }
+
+        // 3. THE VACUUM (Healing)
+        let healed09 = 0;
+        for (let [k, orig] of vaultV09.entries()) {
+            for (let s = 0; s < WINDOW_V09; s++) {
+                if (lotV09[(orig + s) % SIZE] === 0) { lotV09[(orig + s) % SIZE] = k; vaultV09.delete(k); healed09++; break; }
+            }
+        }
+
+        let healed10 = 0;
+        for (let [k, orig] of vaultV10.entries()) {
+            // v10 can heal into a MUCH larger window (32 slots)
+            for (let s = 0; s < P2_LIMIT; s++) {
+                if (lotV10[(orig + s) % SIZE] === 0) { lotV10[(orig + s) % SIZE] = k; vaultV10.delete(k); healed10++; break; }
+            }
+        }
+
+        // 4. POST-HEAL RETRIEVAL SPEED
+        let t09_1 = performance.now();
+        for(let k of keys) {
+            let p = getHash(k); let f = false;
+            for(let s=0; s<WINDOW_V09; s++) { if(lotV09[(p+s)%SIZE] === k) { f=true; break; } }
+            if(!f) vaultV09.get(k);
+        }
+        let t09_2 = performance.now();
+
+        let t10_1 = performance.now();
+        for(let k of keys) {
+            let p = getHash(k); let f = false;
+            for(let s=0; s<P1_LIMIT; s++) { if(lotV10[(p+s)%SIZE] === k) { f=true; break; } }
+            if(!f) { for(let s=P1_LIMIT+1; s<P2_LIMIT; s+=2) { if(lotV10[(p+s)%SIZE] === k) { f=true; break; } } }
+            if(!f) vaultV10.get(k);
+        }
+        let t10_2 = performance.now();
+
+        document.getElementById("v09-res").innerHTML = `
+            <div class="metric">Healed: <span class="highlight">${healed09}</span></div>
+            <div class="metric">Post-Heal Time: <span class="highlight">${(t09_2-t09_1).toFixed(2)}ms</span></div>
+        `;
+        document.getElementById("v10-res").innerHTML = `
+            <div class="metric">Healed: <span class="highlight recovery">${healed10}</span></div>
+            <div class="metric">Post-Heal Time: <span class="highlight">${(t10_2-t10_1).toFixed(2)}ms</span></div>
+        `;
+
+    } finally {
+        btn.disabled = false;
+    }
+}
+</script>
+</body>
+</html>

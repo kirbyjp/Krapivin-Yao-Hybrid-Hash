@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hybrid Hashing v0.12 - Streaming Churn</title>
+    <style>
+        body { font-family: 'Segoe UI', monospace; background: #000; color: #0f0; padding: 20px; }
+        .stats { background: #111; padding: 20px; border: 1px solid #0f0; margin-bottom: 20px; display: flex; gap: 15px; }
+        .column { flex: 1; padding: 15px; border-radius: 8px; background: #0a0a0a; border: 1px solid #333; }
+        .metric { font-size: 1.1em; margin: 8px 0; }
+        .v09 { border-top: 4px solid #ffff00; }
+        .v10 { border-top: 4px solid #ff00ff; }
+        button { padding: 20px; background: #0f0; color: #000; font-weight: bold; cursor: pointer; width: 100%; border: none; }
+        .highlight { color: #fff; font-weight: bold; }
+        .p99 { color: #ff4444; font-weight: bold; } /* Red for tail latency */
+    </style>
+</head>
+<body>
+
+<h1>Krapivin-Yao Hybrid v0.12</h1>
+<p>Streaming Stress Test: 100,000 Continuous Deletions/Insertions (The "Data Center" Simulation)</p>
+
+<div class="stats">
+    <div class="column v09">
+        <div class="title">Hybrid v0.09 (Static Window)</div>
+        <div id="v09-res">--</div>
+    </div>
+    <div class="column v10">
+        <div class="title">Stepped v0.10 (Adaptive)</div>
+        <div id="v10-res">--</div>
+    </div>
+</div>
+
+<button id="runBtn" onclick="runStreamingTest()">Execute Streaming Churn</button>
+
+<script>
+const SIZE = 100000; 
+const LOAD = 0.95;
+const CYCLES = 100000; // 100k live ops
+
+let lotV09 = new Uint32Array(SIZE);
+let lotV10 = new Uint32Array(SIZE);
+let vaultV09 = new Map();
+let vaultV10 = new Map();
+
+function getHash(i) {
+    if (i % 10 === 0) return (i % 100); 
+    return (i * 1337) % SIZE;
+}
+
+async function runStreamingTest() {
+    const btn = document.getElementById("runBtn");
+    btn.disabled = true;
+    
+    // Initial Fill...
+    lotV09.fill(0); lotV10.fill(0); vaultV09.clear(); vaultV10.clear();
+    let currentKeys = Array.from({length: Math.floor(SIZE * LOAD)}, (_, i) => i + 1);
+    
+    // Initial Load
+    currentKeys.forEach(k => {
+        let p = getHash(k);
+        // v09
+        let f09 = false;
+        for(let s=0; s<16; s++) { if(lotV09[(p+s)%SIZE] === 0) { lotV09[(p+s)%SIZE] = k; f09 = true; break; } }
+        if(!f09) vaultV09.set(k, p);
+        // v10
+        let f10 = false;
+        for(let s=0; s<8; s++) { if(lotV10[(p+s)%SIZE] === 0) { lotV10[(p+s)%SIZE] = k; f10 = true; break; } }
+        if(!f10) { for(let s=9; s<32; s+=2) { if(lotV10[(p+s)%SIZE] === 0) { lotV10[(p+s)%SIZE] = k; f10 = true; break; } } }
+        if(!f10) vaultV10.set(k, p);
+    });
+
+    let v09Latencies = [];
+    let v10Latencies = [];
+
+    // --- THE STREAMING CHURN ---
+    for(let i=0; i < CYCLES; i++) {
+        let keyToRemove = currentKeys[Math.floor(Math.random() * currentKeys.length)];
+        let newKey = 1000000 + i;
+        
+        // TEST V09
+        let start09 = performance.now();
+        // 1. Delete
+        let p09 = getHash(keyToRemove);
+        for(let s=0; s<16; s++) { if(lotV09[(p09+s)%SIZE] === keyToRemove) { lotV09[(p09+s)%SIZE] = 0; break; } }
+        // 2. Insert
+        let pNew = getHash(newKey);
+        let f09 = false;
+        for(let s=0; s<16; s++) { if(lotV09[(pNew+s)%SIZE] === 0) { lotV09[(pNew+s)%SIZE] = newKey; f09 = true; break; } }
+        if(!f09) vaultV09.set(newKey, pNew);
+        // 3. Vacuum (Amortized)
+        if(i % 10 === 0) { /* Simplified vacuum for speed */ }
+        v09Latencies.push(performance.now() - start09);
+
+        // TEST V10
+        let start10 = performance.now();
+        // 1. Delete
+        let p10 = getHash(keyToRemove);
+        for(let s=0; s<32; s++) { if(lotV10[(p10+s)%SIZE] === keyToRemove) { lotV10[(p10+s)%SIZE] = 0; break; } }
+        // 2. Insert
+        let pNew10 = getHash(newKey);
+        let f10 = false;
+        for(let s=0; s<8; s++) { if(lotV10[(pNew10+s)%SIZE] === 0) { lotV10[(pNew10+s)%SIZE] = newKey; f10 = true; break; } }
+        if(!f10) { for(let s=9; s<32; s+=2) { if(lotV10[(pNew10+s)%SIZE] === 0) { lotV10[(pNew10+s)%SIZE] = newKey; f10 = true; break; } } }
+        if(!f10) vaultV10.set(newKey, pNew10);
+        v10Latencies.push(performance.now() - start10);
+
+        // Update key pool
+        currentKeys[currentKeys.indexOf(keyToRemove)] = newKey;
+    }
+
+    const getP99 = (arr) => arr.sort((a,b) => a-b)[Math.floor(arr.length * 0.99)];
+    const getAvg = (arr) => arr.reduce((a,b) => a+b, 0) / arr.length;
+
+    document.getElementById("v09-res").innerHTML = `
+        <div class="metric">Avg Latency: <span class="highlight">${(getAvg(v09Latencies)*1000).toFixed(2)}μs</span></div>
+        <div class="metric">P99 (Worst Case): <span class="p99">${(getP99(v09Latencies)*1000).toFixed(2)}μs</span></div>
+    `;
+    document.getElementById("v10-res").innerHTML = `
+        <div class="metric">Avg Latency: <span class="highlight">${(getAvg(v10Latencies)*1000).toFixed(2)}μs</span></div>
+        <div class="metric">P99 (Worst Case): <span class="p99">${(getP99(v10Latencies)*1000).toFixed(2)}μs</span></div>
+    `;
+
+    btn.disabled = false;
+}
+</script>
+</body>
+</html>

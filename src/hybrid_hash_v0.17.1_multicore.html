@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>RTOA v0.17.1 - The Swarm (Universal)</title>
+    <style>
+        body { font-family: 'Courier New', monospace; background: #050505; color: #0f0; padding: 20px; font-size: 13px; }
+        .config-panel { background: #111; border: 1px solid #0f0; padding: 15px; margin-bottom: 20px; }
+        textarea { width: 100%; height: 140px; background: #000; color: #0f0; border: 1px solid #333; font-family: monospace; padding: 10px; margin: 10px 0; }
+        button { width: 100%; padding: 15px; background: #0f0; color: #000; font-weight: bold; border: none; cursor: pointer; }
+        button:disabled { background: #050; color: #0a0; }
+        .progress-container { width: 100%; background: #222; height: 30px; margin: 15px 0; border: 1px solid #0f0; position: relative; }
+        #progress-bar { width: 0%; height: 100%; background: #0f0; }
+        #progress-text { position: absolute; width: 100%; text-align: center; color: #000; font-weight: bold; top: 6px; }
+        table { width: 100%; border-collapse: collapse; background: #0a0a0a; }
+        th, td { border: 1px solid #333; padding: 8px; text-align: left; }
+        th { background: #222; }
+        .status-tag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: bold; margin-bottom: 10px; }
+        .status-sab { background: #004400; color: #0f0; }
+        .status-fallback { background: #444400; color: #ff0; }
+        .log { height: 120px; overflow-y: auto; background: #000; border: 1px solid #222; padding: 10px; margin-top: 10px; color: #888; font-size: 0.8em; }
+    </style>
+</head>
+<body>
+
+<h1>RTOA v0.17.1: The Swarm (Multi-Core Pressure)</h1>
+
+<div id="mode-indicator"></div>
+
+<div class="config-panel">
+    <textarea id="json-config"></textarea>
+    <button id="runBtn" onclick="igniteSwarm()">Ignite Swarm Benchmark</button>
+</div>
+
+<div class="progress-container">
+    <div id="progress-bar"></div>
+    <div id="progress-text">IDLE</div>
+</div>
+
+<div class="dashboard">
+    <table>
+        <thead>
+            <tr>
+                <th>Mode</th>
+                <th>Config (S/W)</th>
+                <th>Cores</th>
+                <th>P99 (μs)</th>
+                <th>Jitter (StdDev)</th>
+                <th>Contention Penalty</th>
+                <th>Cache Cross%</th>
+            </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+    </table>
+</div>
+
+<div class="log" id="sys-log">Initializing system...</div>
+
+<script id="worker-script" type="text/javascript-worker">
+    self.onmessage = function(e) {
+        const { config, sharedBuffer, trialSeed, workerId, totalWorkers, useSAB } = e.data;
+        
+        // Allocate memory (Shared or Private Fallback)
+        const lot = useSAB ? new Int32Array(sharedBuffer) : new Int32Array(config.SIZE);
+        const SIZE = config.SIZE;
+        
+        function mulberry32(a) {
+            return function() {
+                var t = a += 0x6D2B79F5;
+                t = Math.imul(t ^ t >>> 15, t | 1);
+                t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                return ((t ^ t >>> 14) >>> 0) / 4294967296;
+            }
+        }
+        const rand = mulberry32(trialSeed + workerId);
+        const getHash = (k) => (k % 10 === 0) ? (k % 100) : (k * 1337) % SIZE;
+
+        let samples = [];
+        let crossings = 0;
+        let ops = 0;
+        const iterations = config.STEADY_OPS / (config.BATCH_SIZE * totalWorkers);
+
+        for (let b = 0; b < iterations; b++) {
+            let t0 = performance.now();
+            for (let i = 0; i < config.BATCH_SIZE; i++) {
+                let key = Math.floor(rand() * 1000000) + 1;
+                let p = getHash(key);
+                
+                // Hybrid Window Probing
+                for (let s = 0; s < config.WINDOW; s++) {
+                    let idx = (p + s) % SIZE;
+                    if ((idx >> 4) !== (p >> 4)) crossings++; 
+                    if (lot[idx] === key) break; // Simulated hit
+                }
+                ops++;
+            }
+            samples.push((performance.now() - t0) / config.BATCH_SIZE);
+        }
+        self.postMessage({ samples, crossings, ops });
+    };
+</script>
+
+<script>
+const DEFAULTS = {
+    SIZE: 100000,
+    LOAD: 0.95,
+    TRIALS: 50, 
+    BATCH_SIZE: 1000,
+    STEADY_OPS: 1000000,
+    STRIDES: [5, 7],
+    WINDOWS: [16, 32],
+    CORES: [1, 8],
+    SEED: 1337
+};
+
+const useSAB = typeof SharedArrayBuffer !== 'undefined';
+document.getElementById('json-config').value = JSON.stringify(DEFAULTS, null, 4);
+document.getElementById('mode-indicator').innerHTML = useSAB 
+    ? '<span class="status-tag status-sab">MODE: ATOMIC SHARED MEMORY</span>' 
+    : '<span class="status-tag status-fallback">MODE: INDEPENDENT CACHE CONTENTION (Fallback)</span>';
+
+function log(msg) {
+    const l = document.getElementById('sys-log');
+    l.innerText += `> ${msg}\n`;
+    l.scrollTop = l.scrollHeight;
+}
+
+async function igniteSwarm() {
+    const config = JSON.parse(document.getElementById('json-config').value);
+    const btn = document.getElementById('runBtn');
+    const tbody = document.getElementById('results-body');
+    btn.disabled = true;
+    tbody.innerHTML = '';
+    
+    const sharedBuffer = useSAB ? new SharedArrayBuffer(config.SIZE * 4) : null;
+    const allConfigResults = [];
+
+    for (let coreCount of config.CORES) {
+        for (let window of config.WINDOWS) {
+            log(`Testing ${coreCount} Cores, Window ${window}...`);
+            let samples = [];
+            let totalCrossings = 0;
+            let totalOps = 0;
+
+            for (let t = 0; t < config.TRIALS; t++) {
+                const promises = [];
+                const workers = [];
+
+                for (let w = 0; w < coreCount; w++) {
+                    const blob = new Blob([document.getElementById('worker-script').textContent], {type: 'text/javascript'});
+                    const worker = new Worker(URL.createObjectURL(blob));
+                    workers.push(worker);
+
+                    promises.push(new Promise(resolve => {
+                        worker.onmessage = (e) => {
+                            samples.push(...e.data.samples);
+                            totalCrossings += e.data.crossings;
+                            totalOps += e.data.ops;
+                            resolve();
+                        };
+                        worker.postMessage({
+                            config: {...config, WINDOW: window},
+                            sharedBuffer,
+                            trialSeed: config.SEED + t,
+                            workerId: w,
+                            totalWorkers: coreCount,
+                            useSAB
+                        });
+                    }));
+                }
+
+                await Promise.all(promises);
+                workers.forEach(w => w.terminate());
+                
+                let progress = ((allConfigResults.length * config.TRIALS + t) / (config.CORES.length * config.WINDOWS.length * config.TRIALS)) * 100;
+                document.getElementById('progress-bar').style.width = progress + "%";
+                document.getElementById('progress-text').innerText = `SWARMING: ${coreCount} Cores | Trial ${t+1}`;
+            }
+
+            samples.sort((a, b) => a - b);
+            const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+            const stdDev = Math.sqrt(samples.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b) / samples.length);
+
+            allConfigResults.push({
+                cores: coreCount,
+                window,
+                p99: samples[Math.floor(samples.length * 0.99)],
+                stdDev,
+                crossRate: (totalCrossings / totalOps) * 100
+            });
+        }
+    }
+
+    tbody.innerHTML = allConfigResults.map(r => {
+        const baseline = allConfigResults.find(b => b.cores === 1 && b.window === r.window);
+        const penalty = r.p99 / baseline.p99;
+        return `
+            <tr>
+                <td>${useSAB ? 'Shared' : 'Cache'}</td>
+                <td>W:${r.window}</td>
+                <td>${r.cores}</td>
+                <td>${(r.p99 * 1000).toFixed(3)}</td>
+                <td>${(r.stdDev * 1000).toFixed(3)}</td>
+                <td style="color:${penalty > 1.3 ? '#ff4444' : '#44ff44'}">${penalty.toFixed(2)}x</td>
+                <td>${r.crossRate.toFixed(2)}%</td>
+            </tr>
+        `;
+    }).join('');
+
+    btn.disabled = false;
+    document.getElementById('progress-text').innerText = "COMPLETE";
+}
+</script>
+</body>
+</html>
