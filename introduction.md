@@ -1,59 +1,67 @@
-## How This Work Differs From Krapivin’s Elastic Hashing
+## Relationship to Krapivin’s “No Reordering” Constraint
 
-This project is inspired by Andrew Krapivin’s 2025 breakthrough on **Elastic Hashing**, but it is not an implementation of his algorithm. The two approaches share a conceptual motivation — avoiding probe‑sequence collapse at high occupancy — yet they diverge in architecture, goals, and underlying mechanisms.
+Krapivin’s 2025 paper focuses on a very specific and historically important variant of open‑addressed hashing:
 
-### 1. Different Problem Framing
-Krapivin’s work is fundamentally **theoretical**. His contribution shows that the classical “Linear‑Probing Wall” is not a mathematical inevitability. He constructs a probe sequence that guarantees constant‑time behavior even at extreme load factors.
+> **Insertions may not reorder or move any previously inserted elements.**
 
-This project is fundamentally **systems‑oriented**. The goal is to design a hashing architecture that:
+This constraint is central to the classical formulation of the problem.  
+The insertion algorithm must choose an empty slot from the probe sequence, but it may **not**:
 
-- respects modern CPU cache hierarchies  
-- minimizes unpredictable memory jumps  
-- bounds probe lengths to a single cache‑line window  
-- provides stable performance under adversarial clustering  
+- relocate an earlier key,
+- compact clusters,
+- or perform any form of backtracking or migration.
 
-The hybrid system is not a proof technique — it is a practical design for real hardware.
+Krapivin’s breakthrough shows that even under this strict rule set, it is possible to design probe sequences that avoid the classical “Linear‑Probing Wall” and achieve dramatically better expected probe complexity.
 
-### 2. Different Architectural Model
-Krapivin’s Elastic Hashing uses **multi‑level logical arrays** (A₁, A₂, A₃…) to bound probe complexity.
+### How This Project Differs
 
-This project uses a **tiered physical model**:
+This hybrid system does **not** operate under the “no reordering” restriction.  
+It intentionally introduces a mechanism that Krapivin’s model forbids:
 
-- **Tier 1 (Locality Tier):** a cache‑aligned, bounded‑window search region  
-- **Tier 2 (Vault Tier):** a non‑greedy overflow structure  
-- **Repatriation:** a self‑healing mechanism that migrates overflow entries back into Tier 1 when space becomes available  
+### **Repatriation (Backtracking Migration)**  
+When space becomes available in the fast tier (Tier 1), the system may:
 
-The tiers in this system correspond to **hardware locality**, not abstract probe levels.
+- identify an element stored in the overflow tier (Tier 2),
+- remove it from the overflow structure,
+- and migrate it back into the locality‑optimized region.
 
-### 3. Different Handling of Overflow
-Krapivin’s algorithm ensures that probe sequences remain short by construction.
+This is a form of **post‑insertion movement**, which is explicitly disallowed in Krapivin’s theoretical framework.
 
-The hybrid system takes a different approach:
+### Why This Is Not a Violation — But a Different Problem Class
 
-- If a key cannot be placed within the locality window, it is redirected to the **Vault Tier**.  
-- A lightweight **breadcrumb** is left behind to preserve lookup determinism.  
-- When deletions or vacated slots appear, **repatriation** pulls keys back into the fast tier.
+Krapivin’s results apply to the classical model of open addressing **without reordering**.  
+Your system is designed for **real hardware**, not for that classical model.
 
-This creates a dynamic equilibrium that maintains locality without requiring a mathematically constructed probe sequence.
+The goals differ:
 
-### 4. Different Performance Goals
-Krapivin’s work proves that constant‑time behavior is *possible*.
+| Krapivin’s Goal | This Project’s Goal |
+|-----------------|---------------------|
+| Prove that constant‑time search is possible without ever moving elements. | Achieve stable, cache‑friendly performance on real CPUs, even under adversarial clustering. |
+| Work within a strict theoretical constraint. | Exploit modern hardware behavior (cache lines, locality windows, dynamic migration). |
+| Construct a mathematically optimal probe sequence. | Build a practical hybrid architecture with bounded locality and self‑healing. |
 
-This project demonstrates that constant‑time behavior is *achievable in practice* on commodity hardware, even under:
+### Does Repatriation “Break the Rules”?
 
-- adversarial clustering  
-- high occupancy  
-- constrained cache‑line locality  
+Under Krapivin’s rules: **yes** — repatriation is not allowed.
 
-In stress tests, the hybrid system achieved up to **780× faster** lookups than traditional greedy linear probing at 90% load.
+Under real‑world systems design: **no** — repatriation is a powerful optimization that:
 
-### Summary
-Krapivin showed that the wall can be broken in theory.  
-This project shows how to build a hashing system that avoids the wall **in real hardware**, using a hybrid tiered design that emphasizes:
+- reduces entropy,
+- restores locality,
+- drains pressure from the overflow tier,
+- and prevents long‑term degradation.
 
-- cache locality  
-- bounded probe windows  
-- overflow elasticity  
-- dynamic self‑healing  
+Your system is not trying to solve the same constrained problem he solved.  
+It is solving a **systems‑level performance problem** that his paper does not address.
 
-The two approaches are complementary, but not equivalent.
+### How the Two Approaches Relate
+
+- Krapivin proves that the wall is not mathematically inevitable.  
+- This hybrid system shows how to avoid the wall **in practice**, using mechanisms that the classical model forbids but real hardware benefits from.
+
+In other words:
+
+**Krapivin breaks the wall in theory.  
+This project breaks the wall in practice.**
+
+They are complementary, not competing.
