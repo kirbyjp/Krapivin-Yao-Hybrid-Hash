@@ -1,9 +1,17 @@
 ---
 title: "Repatriatory Tiered Open Addressing (RTOA): A Hierarchy-Aware Extension to Optimal Open Addressing"
-authors: [Your Name], [Collaborator Names]
+authors:
+  - "Your Name"
+  - "Collaborator Names"
 date: "June 2025"
 subject: "Data Structures and Algorithms (cs.DS); Hardware Architecture (cs.AR)"
-keywords: [Open Addressing, Hash Tables, Cache Locality, Tiered Storage, Self-Healing Data Structures]
+keywords:
+  - "Open Addressing"
+  - "Hash Tables"
+  - "Cache Locality"
+  - "Tiered Storage"
+  - "Self-Healing Data Structures"
+  - "Memory Fragmentation"
 ---
 
 # Repatriatory Tiered Open Addressing (RTOA): A Hierarchy-Aware Extension to Optimal Open Addressing
