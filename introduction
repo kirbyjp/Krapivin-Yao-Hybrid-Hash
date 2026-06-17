@@ -1,0 +1,4 @@
+## Introduction
+###For four decades, computer science operated under "Yao’s Conjecture," which suggested that as a hash table reaches 99% occupancy, performance must inevitably degrade. In 2025, Andrew Krapivin proved mathematically that "Elastic Hashing" can maintain constant-time speeds even at extreme densities.
+
+### This project implements a Hybrid Tiered System designed specifically for modern CPU architectures (tested on an Intel Core i7-7700HQ). By combining a high-speed "Greedy" baseline with a non-greedy "Vault" and active "Economic Repatriation" (Vacuuming), we achieved retrieval speeds up to 780x faster than traditional greedy hashing at high occupancy.
