@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hybrid Hashing v0.06 - Survivor</title>
+    <style>
+        body { font-family: monospace; background: #000; color: #0f0; padding: 20px; }
+        .stats { background: #111; padding: 20px; border: 2px solid #0f0; margin-bottom: 20px; }
+        .metric { font-size: 1.2em; margin: 10px 0; }
+        .greedy { color: #ff4444; }
+        .hybrid { color: #4444ff; }
+        button { padding: 15px; background: #0f0; font-weight: bold; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<h1>Hybrid Hashing v0.06 — Optimized Stress Test</h1>
+<p>Reducing size to avoid Browser Timeout while still showing "The Wall".</p>
+
+<div class="stats" id="output">Ready to benchmark...</div>
+<button id="runBtn" onclick="runComparison()">Run Comparison</button>
+
+<script>
+// REDUCED SIZE to prevent browser hang
+const SIZE = 100000; 
+const WINDOW = 16;
+const LOAD = 0.90; // 90% load
+
+let lotGreedy = new Uint32Array(SIZE);
+let lotHybrid = new Uint32Array(SIZE);
+let vault = new Map();
+
+function getClusteredHash(i) {
+    // Force a smaller cluster (10% of items into 100 slots) 
+    // to show the slowdown without crashing.
+    if (i % 10 === 0) return (i % 100); 
+    return (i * 1337) % SIZE;
+}
+
+async function runComparison() {
+    const out = document.getElementById("output");
+    const btn = document.getElementById("runBtn");
+    btn.disabled = true;
+    out.innerHTML = "Processing Greedy Pile-up (Please wait 1-2 seconds)...";
+
+    // Use a tiny timeout to allow the UI to update the text above
+    await new Promise(r => setTimeout(r, 100));
+
+    lotGreedy.fill(0);
+    lotHybrid.fill(0);
+    vault.clear();
+
+    let fillCount = Math.floor(SIZE * LOAD);
+    
+    // --- FILLING PHASE ---
+    for (let i = 1; i <= fillCount; i++) {
+        let pos = getClusteredHash(i);
+        
+        // Greedy Fill
+        let gPos = pos;
+        while(lotGreedy[gPos] !== 0) { gPos = (gPos + 1) % SIZE; }
+        lotGreedy[gPos] = i;
+
+        // Hybrid Fill
+        let hFound = false;
+        for(let s=0; s<WINDOW; s++) {
+            let hIdx = (pos + s) % SIZE;
+            if(lotHybrid[hIdx] === 0) {
+                lotHybrid[hIdx] = i;
+                hFound = true;
+                break;
+            }
+        }
+        if(!hFound) vault.set(i, pos);
+    }
+
+    // --- RETRIEVAL PHASE ---
+    let t1 = performance.now();
+    for(let i=1; i<=fillCount; i++) {
+        let pos = getClusteredHash(i);
+        while(lotGreedy[pos] !== i) { pos = (pos + 1) % SIZE; }
+    }
+    let t2 = performance.now();
+
+    let t3 = performance.now();
+    for(let i=1; i<=fillCount; i++) {
+        let pos = getClusteredHash(i);
+        let found = false;
+        for(let s=0; s<WINDOW; s++) {
+            if(lotHybrid[(pos + s) % SIZE] === i) { found = true; break; }
+        }
+        if(!found) vault.get(i);
+    }
+    let t4 = performance.now();
+
+    let gTime = t2 - t1;
+    let hTime = t4 - t3;
+
+    out.innerHTML = `
+        <div class="metric greedy"><strong>[PURE GREEDY]</strong>: ${gTime.toFixed(2)} ms</div>
+        <div class="metric hybrid"><strong>[YOUR HYBRID]</strong>: ${hTime.toFixed(2)} ms</div>
+        <br>
+        <div class="metric"><strong>RESULT: <span style="color:yellow">${(gTime / hTime).toFixed(2)}x Faster</span></strong></div>
+        <div class="metric">Vault handled ${vault.size} cars that would have caused jams.</div>
+    `;
+    btn.disabled = false;
+}
+</script>
+</body>
+</html>

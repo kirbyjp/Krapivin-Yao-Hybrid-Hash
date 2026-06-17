@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hybrid Hashing v0.07 - Self-Healing</title>
+    <style>
+        body { font-family: monospace; background: #000; color: #0f0; padding: 20px; }
+        .stats { background: #111; padding: 20px; border: 2px solid #0f0; margin-bottom: 20px; }
+        .metric { font-size: 1.2em; margin: 10px 0; }
+        .vacuum { color: #ffff00; font-weight: bold; }
+        button { padding: 15px; background: #0f0; font-weight: bold; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<h1>Hybrid Hashing v0.07 — Economic Repatriation</h1>
+<p>Simulating: 1. Parking -> 2. Deleting (Holes) -> 3. Vacuuming (Pulling from Vault)</p>
+
+<div class="stats" id="output">Ready to test the Vacuum logic...</div>
+<button id="runBtn" onclick="runDynamicTest()">Run Dynamic Stress Test</button>
+
+<script>
+const SIZE = 100000; 
+const WINDOW = 16;
+const LOAD = 0.90;
+
+let lotHybrid = new Uint32Array(SIZE);
+let vault = new Map(); // Andrew's Vault stores {key: original_hash}
+
+function getClusteredHash(i) {
+    if (i % 10 === 0) return (i % 100); 
+    return (i * 1337) % SIZE;
+}
+
+async function runDynamicTest() {
+    const out = document.getElementById("output");
+    out.innerHTML = "Phase 1: Creating initial jams...";
+    await new Promise(r => setTimeout(r, 100));
+
+    lotHybrid.fill(0);
+    vault.clear();
+    let parkedKeys = [];
+
+    // --- STEP 1: INITIAL PARK ---
+    let fillCount = Math.floor(SIZE * LOAD);
+    for (let i = 1; i <= fillCount; i++) {
+        let pos = getClusteredHash(i);
+        let hFound = false;
+        for(let s=0; s<WINDOW; s++) {
+            let hIdx = (pos + s) % SIZE;
+            if(lotHybrid[hIdx] === 0) {
+                lotHybrid[hIdx] = i;
+                hFound = true;
+                break;
+            }
+        }
+        if(!hFound) vault.set(i, pos);
+        parkedKeys.push(i);
+    }
+
+    let initialVaultSize = vault.size;
+
+    // --- STEP 2: THE CHURN (Create Holes) ---
+    out.innerHTML = "Phase 2: Removing 10,000 random cars (Creating Holes)...";
+    await new Promise(r => setTimeout(r, 100));
+    for (let i = 0; i < 10000; i++) {
+        let randomIndex = Math.floor(Math.random() * parkedKeys.length);
+        let keyToDelete = parkedKeys[randomIndex];
+        // Find it in Lot A and delete it
+        let pos = getClusteredHash(keyToDelete);
+        for(let s=0; s<WINDOW; s++) {
+            let hIdx = (pos + s) % SIZE;
+            if(lotHybrid[hIdx] === keyToDelete) {
+                lotHybrid[hIdx] = 0; // HOLE CREATED
+                break;
+            }
+        }
+    }
+
+    // --- STEP 3: THE VACUUM (Your Repatriation Logic) ---
+    out.innerHTML = "Phase 3: Running the Vacuum Pull...";
+    await new Promise(r => setTimeout(r, 100));
+    
+    let repatriatedCount = 0;
+    // We look at the vault and see if any exiled cars can now fit in Lot A holes
+    for (let [key, originalHash] of vault.entries()) {
+        for (let s = 0; s < WINDOW; s++) {
+            let hIdx = (originalHash + s) % SIZE;
+            if (lotHybrid[hIdx] === 0) {
+                // WE FOUND A HOME! Pull it back from the Vault.
+                lotHybrid[hIdx] = key;
+                vault.delete(key);
+                repatriatedCount++;
+                break; 
+            }
+        }
+    }
+
+    out.innerHTML = `
+        <div class="metric">Initial Vault Size: ${initialVaultSize}</div>
+        <div class="metric">Holes Created: 10,000</div>
+        <br>
+        <div class="metric vacuum">VACUUM RESULT: ${repatriatedCount} cars pulled back to Lot A</div>
+        <div class="metric">Current Vault Size: ${vault.size}</div>
+        <br>
+        <div class="metric"><strong>Economic Efficiency: +${((repatriatedCount / initialVaultSize) * 100).toFixed(2)}%</strong></div>
+        <p style="color:#888">By re-ordering the data, we've moved shunted cars back into the CPU cache.</p>
+    `;
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hybrid Cache-Aware Hashing</title>
+    <style>
+        body { font-family: monospace; background: #1a1a1a; color: #00ff00; padding: 20px; }
+        .stats { background: #333; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        button { padding: 10px; background: #00ff00; color: black; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>Hybrid Hashing vs. L3 Cache</h1>
+    <p>Hardware detected: Core i7 7700HQ (64-byte Cache Lines)</p>
+    
+    <div class="stats" id="output">
+        Press Start to begin Stress Test...
+    </div>
+    
+    <button onclick="runTest()">Run Stress Test (1 Million Ops)</button>
+
+<script>
+    // 1. ALLOCATE CONTIGUOUS MEMORY (Modeling the Lot)
+    // 1,000,000 slots of 4 bytes = 4MB (Fits comfortably in your 6MB L3 Cache)
+    const SIZE = 1000000;
+    const lotA = new Uint32Array(SIZE);
+    const windowSize = 16; // One 64-byte Cache Line on your i7
+
+    function runTest() {
+        const out = document.getElementById('output');
+        out.innerHTML = "Running... check console for raw data.";
+
+        // Fill lot to 99% occupancy
+        for(let i=0; i<SIZE * 0.99; i++) {
+            lotA[Math.floor(Math.random() * SIZE)] = Math.random() * 100000;
+        }
+
+        // --- TEST 1: PURE GREEDY (LINEAR PROBING) ---
+        let startGreedy = performance.now();
+        let greedyHops = 0;
+        for(let i=0; i<1000000; i++) {
+            let pos = i % SIZE;
+            // Greedy probes until it finds a 0 (empty spot)
+            while(lotA[pos] !== 0) {
+                pos = (pos + 1) % SIZE;
+                greedyHops++;
+                if (greedyHops > 10000000) break; // Safety break
+            }
+        }
+        let endGreedy = performance.now();
+
+        // --- TEST 2: OUR HYBRID (CACHE-AWARE) ---
+        let startHybrid = performance.now();
+        let hybridHops = 0;
+        for(let i=0; i<1000000; i++) {
+            let pos = i % SIZE;
+            let found = false;
+            // Only search within the 64-byte cache line (16 slots)
+            for(let step=0; step < windowSize; step++) {
+                let check = (pos + step) % SIZE;
+                if(lotA[check] === 0) {
+                    found = true;
+                    hybridHops += step;
+                    break;
+                }
+            }
+            if(!found) {
+                // SHUNT TO LOT B (Simulated: We assume Lot B is constant time)
+                hybridHops += 1; 
+            }
+        }
+        let endHybrid = performance.now();
+
+        out.innerHTML = `
+            <strong>RESULTS (1 Million Lookups):</strong><br><br>
+            [PURE GREEDY]<br>
+            Time: ${(endGreedy - startGreedy).toFixed(2)} ms<br>
+            Total Memory Jumps: ${greedyHops}<br><br>
+            [OUR HYBRID]<br>
+            Time: ${(endHybrid - startHybrid).toFixed(2)} ms<br>
+            Total Memory Jumps: ${hybridHops}<br><br>
+            <strong>Verdict:</strong> ${ (endGreedy - startGreedy) / (endHybrid - startHybrid) > 1 ? "Hybrid is Faster!" : "Greedy won this round."}
+        `;
+    }
+</script>
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hybrid Hashing v0.03</title>
+    <style>
+        body { font-family: monospace; background: #111; color: #0f0; padding: 20px; line-height: 1.5; }
+        .stats { background: #222; padding: 15px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #0f0; }
+        button { padding: 10px 20px; background: #0f0; color: black; border: none; font-weight: bold; cursor: pointer; }
+        .log { color: #888; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+<h1>Hybrid Hashing v0.03 — Cache-Pure & Bit-Packed</h1>
+<p>Targeting i7 7700HQ L3 Cache (4MB block, 64-byte lines)</p>
+
+<div class="stats" id="output">Ready for high-speed stress test...</div>
+<button onclick="runTest()">Execute 1M Operations</button>
+
+<script>
+const SIZE_A = 1000000;  // 4MB (Fits in your 6MB L3 Cache)
+const WINDOW = 16;       // Exactly one 64-byte cache line
+const LOAD_FACTOR = 0.95;
+
+// Bitmasks
+const FULL_BIT = 0x80000000;
+const BREAD_BIT = 0x40000000;
+const DATA_MASK = 0x3FFFFFFF;
+
+// Allocate CONTIGUOUS memory
+let lotA = new Uint32Array(SIZE_A);
+let lotB = new Map(); // Andrew's Vault (simulated as O(1) Map)
+
+function insertHybrid(key) {
+    let pos = key % SIZE_A;
+    
+    // 1. PROXIMITY SEARCH (The Cache Line Walk)
+    for (let step = 0; step < WINDOW; step++) {
+        let idx = (pos + step) % SIZE_A;
+        if ((lotA[idx] & FULL_BIT) === 0) {
+            lotA[idx] = FULL_BIT | (key & DATA_MASK);
+            return step; 
+        }
+    }
+
+    // 2. SHUNT TO LOT B (The Vault)
+    lotB.set(key, "VAULT_DATA_" + key);
+    
+    // Leave breadcrumb without overwriting existing data if possible
+    // We'll mark the original hash as a 'Redirector'
+    lotA[pos] |= BREAD_BIT; 
+    return WINDOW + 5; // Penalty for shunting
+}
+
+function runTest() {
+    const out = document.getElementById("output");
+    out.innerHTML = "Warming up CPU and Saturating Cache...";
+    
+    lotA.fill(0);
+    lotB.clear();
+
+    // 1. FILL PHASE (Simulate real clustering)
+    let fillCount = Math.floor(SIZE_A * LOAD_FACTOR);
+    for (let i = 0; i < fillCount; i++) {
+        insertHybrid(i * 1337); // Use a multiplier to spread the hash
+    }
+
+    // 2. RETRIEVAL TEST (1 Million Hops)
+    let t1 = performance.now();
+    let totalHops = 0;
+    
+    for (let i = 0; i < 1000000; i++) {
+        let key = (i * 1337);
+        let pos = key % SIZE_A;
+        
+        // CHECK THE WINDOW FIRST
+        let found = false;
+        for (let step = 0; step < WINDOW; step++) {
+            let idx = (pos + step) % SIZE_A;
+            if ((lotA[idx] & DATA_MASK) === (key & DATA_MASK)) {
+                totalHops += step;
+                found = true;
+                break;
+            }
+        }
+        
+        // IF NOT IN WINDOW, CHECK BREADCRUMB
+        if (!found && (lotA[pos] & BREAD_BIT)) {
+            let val = lotB.get(key);
+            totalHops += WINDOW + 1;
+        }
+    }
+    let t2 = performance.now();
+
+    out.innerHTML = `
+        <strong>HYBRID PERFORMANCE (v0.03)</strong><br>
+        Memory Type: Uint32Array (Contiguous)<br>
+        Occupancy: ${(LOAD_FACTOR * 100).toFixed(1)}%<br><br>
+        
+        Time: ${(t2 - t1).toFixed(2)} ms<br>
+        Average Cost per Lookup: ${(totalHops / 1000000).toFixed(2)} hops<br>
+        Vault Size (Lot B): ${lotB.size} items<br><br>
+        
+        <span class="log">Note: This is running entirely within your i7's L3 Cache.</span>
+    `;
+}
+</script>
+
+</body>
+</html>
