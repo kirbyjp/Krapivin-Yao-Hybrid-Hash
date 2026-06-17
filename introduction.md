@@ -1,13 +1,59 @@
-## Introduction
+## How This Work Differs From Krapivin’s Elastic Hashing
 
-For four decades, computer science operated under **Yao’s Conjecture**, which implied that open‑addressing hash tables must experience severe performance degradation as occupancy approaches **99%**. This collapse — often called the *Linear‑Probing Wall* — was treated as an unavoidable consequence of probe‑sequence growth and clustering.
+This project is inspired by Andrew Krapivin’s 2025 breakthrough on **Elastic Hashing**, but it is not an implementation of his algorithm. The two approaches share a conceptual motivation — avoiding probe‑sequence collapse at high occupancy — yet they diverge in architecture, goals, and underlying mechanisms.
 
-In 2025, **Andrew Krapivin** demonstrated that this limitation is not fundamental. His work on **Elastic Hashing** proved that it is possible to maintain **constant‑time performance** even at extremely high load factors by restructuring how probe sequences behave under pressure.
+### 1. Different Problem Framing
+Krapivin’s work is fundamentally **theoretical**. His contribution shows that the classical “Linear‑Probing Wall” is not a mathematical inevitability. He constructs a probe sequence that guarantees constant‑time behavior even at extreme load factors.
 
-This project implements a **Hybrid Tiered Hashing System** inspired by those insights and optimized for modern CPU architectures (tested on an Intel Core i7‑7700HQ). The design combines:
+This project is fundamentally **systems‑oriented**. The goal is to design a hashing architecture that:
 
-- a **Locality‑Optimized Primary Tier** (fast, cache‑aligned, bounded‑window search),
-- an **Elastic Overflow Tier** (non‑greedy, collision‑resistant storage),
-- and an active **Repatriation Mechanism** (periodic self‑healing that migrates overflow entries back into the fast tier).
+- respects modern CPU cache hierarchies  
+- minimizes unpredictable memory jumps  
+- bounds probe lengths to a single cache‑line window  
+- provides stable performance under adversarial clustering  
 
-Under adversarial clustering and high occupancy, this hybrid architecture achieved lookup speeds up to **780× faster** than traditional greedy linear probing. The system avoids probe‑sequence collapse, preserves cache locality, and maintains stable performance even when the primary tier is near saturation.
+The hybrid system is not a proof technique — it is a practical design for real hardware.
+
+### 2. Different Architectural Model
+Krapivin’s Elastic Hashing uses **multi‑level logical arrays** (A₁, A₂, A₃…) to bound probe complexity.
+
+This project uses a **tiered physical model**:
+
+- **Tier 1 (Locality Tier):** a cache‑aligned, bounded‑window search region  
+- **Tier 2 (Vault Tier):** a non‑greedy overflow structure  
+- **Repatriation:** a self‑healing mechanism that migrates overflow entries back into Tier 1 when space becomes available  
+
+The tiers in this system correspond to **hardware locality**, not abstract probe levels.
+
+### 3. Different Handling of Overflow
+Krapivin’s algorithm ensures that probe sequences remain short by construction.
+
+The hybrid system takes a different approach:
+
+- If a key cannot be placed within the locality window, it is redirected to the **Vault Tier**.  
+- A lightweight **breadcrumb** is left behind to preserve lookup determinism.  
+- When deletions or vacated slots appear, **repatriation** pulls keys back into the fast tier.
+
+This creates a dynamic equilibrium that maintains locality without requiring a mathematically constructed probe sequence.
+
+### 4. Different Performance Goals
+Krapivin’s work proves that constant‑time behavior is *possible*.
+
+This project demonstrates that constant‑time behavior is *achievable in practice* on commodity hardware, even under:
+
+- adversarial clustering  
+- high occupancy  
+- constrained cache‑line locality  
+
+In stress tests, the hybrid system achieved up to **780× faster** lookups than traditional greedy linear probing at 90% load.
+
+### Summary
+Krapivin showed that the wall can be broken in theory.  
+This project shows how to build a hashing system that avoids the wall **in real hardware**, using a hybrid tiered design that emphasizes:
+
+- cache locality  
+- bounded probe windows  
+- overflow elasticity  
+- dynamic self‑healing  
+
+The two approaches are complementary, but not equivalent.
