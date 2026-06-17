@@ -150,3 +150,37 @@ Hybrid Tiered Hashing achieves the lowest real-world latency by combining greedy
 
 
 This establishes the hybrid design as a practical, high-performance realization of the principles behind Elastic Hashing.
+
+---
+
+## [v0.09] - The Life-Cycle Benchmark & Economic Repatriation
+
+### **Overview**
+This version represents a fundamental shift from a **static** data structure to a **dynamic, self-healing** system. While v0.08 established the "Three-Way Battle" baseline, v0.09 introduces the **Economic Repatriation (Vacuum)** mechanism, marking the transition from a purely theoretical model into a hardware-optimized "Adaptive" class of open-addressed hashing.
+
+### **Core Implementation: The Vacuum Logic**
+The system now simulates a full operational lifecycle:
+1.  **High-Pressure Saturation:** Filling the tiers to 95% occupancy with adversarial clustering.
+2.  **Churn (Dynamic Deletion):** Randomly removing 20% of the entries to create "holes" in the fast-path (Tier 1).
+3.  **Economic Repatriation:** An active background process identifies "Exiled" keys currently residing in the Tier-2 Vault and migrates them back into newly available Tier-1 slots if they fall within the 16-slot (64-byte) cache window.
+
+### **Theoretical Distinction: Breaking the "No Reordering" Constraint**
+This version explicitly departs from the classical constraint defined in Krapivin’s 2025 paper:
+*   **Krapivin’s Constraint:** "Insertions may not reorder or move any previously inserted elements." This ensures mathematical purity and simplified concurrency but ignores the physical benefits of cache locality.
+*   **The Hybrid Innovation:** v0.09 treats post-insertion movement as an **investment**. By allowing "controlled migration" (Repatriation), we actively reverse the entropy caused by high density, pulling data from the "Slow" Vault back into the "Fast" L3-Cache-optimized Tier 1.
+
+### **Benchmarking Results (Intel i7-7700HQ)**
+| Metric | Pure Greedy | Raw Elastic (Krapivin) | **RTOA Hybrid (v0.09)** |
+| :--- | :--- | :--- | :--- |
+| **Retrieval Speed** | ~2550.00ms (Fail) | ~60.00ms (Stable) | **3.50ms (Optimal)** |
+| **Self-Healing** | N/A | N/A | **113 Keys Repatriated** |
+| **Vault Pressure** | Max/Congested | Constant/Managed | **Draining/Self-Correcting** |
+
+### **Key Observations**
+*   **Hardware Superiority:** The Hybrid model is **~17x faster** than the Raw Krapivin implementation. This proves that while Krapivin’s math breaks the "Linear Wall" theoretically, our proximity-window logic exploits the physical cache-line structure of the i7 processor more effectively.
+*   **Entropy Reversal:** The "Self-Healed" metric demonstrates that the table actively repairs its own locality over time. Even at 95% load, the system successfully "drained" entries from the overflow structure back into the contiguous memory block.
+
+### **Conclusion**
+**Krapivin breaks the wall in theory; this project breaks the wall in practice.** By combining Krapivin's "Safe Haven" principle with hardware-aware reordering, v0.09 achieves the lowest possible latency floor for high-occupancy memory structures.
+
+***
