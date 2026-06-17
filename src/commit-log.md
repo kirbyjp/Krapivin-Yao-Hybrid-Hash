@@ -184,3 +184,11 @@ This version explicitly departs from the classical constraint defined in Krapivi
 **Krapivin breaks the wall in theory; this project breaks the wall in practice.** By combining Krapivin's "Safe Haven" principle with hardware-aware reordering, v0.09 achieves the lowest possible latency floor for high-occupancy memory structures.
 
 ***
+---
+
+## The "Adaptive Stepped" v0.10 Logic
+To implement your RA's suggestions, we will modify the insertion logic for v0.10 to use a "Social Distancing" phase.
+Phase 1 (Greedy): Check slots 0–8. If any are open, take them. (Maximum speed).
+Phase 2 (Local Elastic): Check slots 9–32. But skip every other slot. (e.g., check 9, 11, 13...).
+Why? This intentionally leaves "firebreaks" in the L3 cache so that future cars have a higher chance of finding a Phase 1 spot.
+Phase 3 (Vault): If still not parked, shunt to Lot B.
