@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hybrid Hashing v0.08 - Triple Crown</title>
+    <style>
+        body { font-family: monospace; background: #000; color: #0f0; padding: 20px; }
+        .stats { background: #111; padding: 20px; border: 1px solid #0f0; margin-bottom: 20px; display: flex; justify-content: space-around; }
+        .column { flex: 1; padding: 10px; border-right: 1px solid #333; }
+        .column:last-child { border-right: none; }
+        .metric { font-size: 1.1em; margin: 5px 0; }
+        .title { font-weight: bold; font-size: 1.3em; margin-bottom: 10px; text-decoration: underline; }
+        .greedy { color: #ff4444; }
+        .krapivin { color: #00ffff; }
+        .hybrid { color: #ffff00; }
+        button { padding: 15px; background: #0f0; font-weight: bold; cursor: pointer; width: 100%; }
+    </style>
+</head>
+<body>
+
+<h1>Krapivin-Yao Hybrid Hash v0.08</h1>
+<p>The Three-Way Battle: Greedy vs. Raw Elastic (Krapivin) vs. Proximity Hybrid</p>
+
+<div class="stats" id="output">
+    <div class="column greedy">
+        <div class="title">PURE GREEDY</div>
+        <div id="g-res">Waiting...</div>
+    </div>
+    <div class="column krapivin">
+        <div class="title">RAW KRAPIVIN</div>
+        <div id="k-res">Waiting...</div>
+    </div>
+    <div class="column hybrid">
+        <div class="title">PROXIMITY HYBRID</div>
+        <div id="h-res">Waiting...</div>
+    </div>
+</div>
+
+<button id="runBtn" onclick="runTripleBattle()">Execute Triple Crown Benchmark</button>
+
+<script>
+const SIZE = 100000; 
+const WINDOW = 16;
+const LOAD = 0.95; // Extreme density
+
+let lotGreedy = new Uint32Array(SIZE);
+let lotElastic = new Uint32Array(SIZE); // Raw Krapivin
+let lotHybrid = new Uint32Array(SIZE);
+let vault = new Map();
+
+function getClusteredHash(i) {
+    if (i % 10 === 0) return (i % 100); // 10% clumped
+    return (i * 1337) % SIZE;
+}
+
+// RAW KRAPIVIN LOGIC: Intentional non-greedy skips
+function parkElastic(key) {
+    let pos = getClusteredHash(key);
+    let attempt = 0;
+    while(true) {
+        // Elastic hashing pattern: skip-pattern math (simplified as quadratic)
+        let idx = (pos + (attempt * attempt)) % SIZE;
+        if (lotElastic[idx] === 0) {
+            lotElastic[idx] = key;
+            return attempt;
+        }
+        attempt++;
+    }
+}
+
+async function runTripleBattle() {
+    document.getElementById("runBtn").disabled = true;
+    
+    // Clear everything
+    lotGreedy.fill(0); lotElastic.fill(0); lotHybrid.fill(0); vault.clear();
+    let fillCount = Math.floor(SIZE * LOAD);
+
+    // --- PHASE 1: FILL ---
+    for (let i = 1; i <= fillCount; i++) {
+        let pos = getClusteredHash(i);
+        // 1. Greedy
+        let gP = pos; while(lotGreedy[gP] !== 0) { gP = (gP + 1) % SIZE; } lotGreedy[gP] = i;
+        // 2. Elastic
+        parkElastic(i);
+        // 3. Hybrid
+        let hF = false;
+        for(let s=0; s<WINDOW; s++) {
+            let hI = (pos + s) % SIZE;
+            if(lotHybrid[hI] === 0) { lotHybrid[hI] = i; hF = true; break; }
+        }
+        if(!hF) vault.set(i, pos);
+    }
+
+    // --- PHASE 2: BENCHMARK RETRIEVAL ---
+    
+    // GREEDY
+    let tG1 = performance.now();
+    for(let i=1; i<=fillCount; i++) {
+        let p = getClusteredHash(i);
+        while(lotGreedy[p] !== i) { p = (p + 1) % SIZE; }
+    }
+    let tG2 = performance.now();
+
+    // ELASTIC (Krapivin)
+    let tK1 = performance.now();
+    for(let i=1; i<=fillCount; i++) {
+        let p = getClusteredHash(i);
+        let a = 0;
+        while(lotElastic[(p + (a * a)) % SIZE] !== i) { a++; }
+    }
+    let tK2 = performance.now();
+
+    // HYBRID (Ours)
+    let tH1 = performance.now();
+    for(let i=1; i<=fillCount; i++) {
+        let p = getClusteredHash(i);
+        let found = false;
+        for(let s=0; s<WINDOW; s++) {
+            if(lotHybrid[(p + s) % SIZE] === i) { found = true; break; }
+        }
+        if(!found) vault.get(i);
+    }
+    let tH2 = performance.now();
+
+    // Display Results
+    document.getElementById("g-res").innerHTML = `<div class="metric">Time: ${(tG2-tG1).toFixed(2)}ms</div><div class="metric">Status: Clustered</div>`;
+    document.getElementById("k-res").innerHTML = `<div class="metric">Time: ${(tK2-tK1).toFixed(2)}ms</div><div class="metric">Status: Constant</div>`;
+    document.getElementById("h-res").innerHTML = `<div class="metric">Time: ${(tH2-tH1).toFixed(2)}ms</div><div class="metric">Status: Fast + Vault</div>`;
+    
+    document.getElementById("runBtn").disabled = false;
+}
+</script>
+</body>
+</html>
