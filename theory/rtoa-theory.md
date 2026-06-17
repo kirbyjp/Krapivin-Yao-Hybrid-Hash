@@ -93,12 +93,97 @@ Standard open-addressed tables often accumulate entropy (disorder) over time. In
 
 ---
 
-## 9. Future Work
+## 9. Workload Applicability and Fragmentation Resistance
+
+Modern data‑center systems rarely operate under the static, read‑heavy assumptions used in classical open‑addressing theory. Instead, they exhibit **high‑churn streaming behavior**, where items are continuously inserted, expired, and deleted. This pattern is dominant in:
+
+- Mail transport queues (e.g., Exchange‑style message pipelines)
+- Packet filtering and firewall state tables
+- Distributed telemetry and event logging systems
+- CDN request caches and edge‑cache admission structures
+- Real‑time analytics and ingestion buffers
+- Bloom‑filter‑backed admission and eviction structures
+
+These workloads are not “write‑only” but **write‑and‑expire**, producing a constant stream of insertions and deletions. This churn creates **holes** in the primary tier and leads to long‑term **locality erosion**.
+
+---
+
+### 9.1 Locality Erosion in Static Models
+
+In classical open addressing (including Elastic Hashing), deletions create “stale voids” that cannot be exploited to improve the placement of existing keys. Over time, this produces a **Swiss‑cheese fragmentation pattern**:
+
+- Tier‑1 (the fast, cache‑aligned region) becomes underutilized  
+- Valid keys remain stranded in Tier‑2  
+- Entropy accumulates  
+- Physical locality degrades  
+- Latency rises despite constant‑time probe complexity
+
+Static models have **no mechanism** to reverse this entropy.
+
+---
+
+### 9.2 RTOA as a Self‑Defragmenting Hash Table
+
+RTOA treats each deletion in Tier‑1 as a **Vacuum Trigger**:
+
+1. A vacated Tier‑1 slot becomes an opportunity for compaction.  
+2. Keys in Tier‑2 whose locality windows overlap the vacancy are **repatriated** upward.  
+3. This restores cache‑line locality and reduces Tier‑2 pressure.  
+4. Over time, the system converges toward a **low‑entropy steady state**.
+
+This behavior is analogous to **real‑time defragmentation** in memory allocators or **page promotion** in CPU cache hierarchies.
+
+RTOA therefore provides **Fragmentation Resistance**:  
+it continuously repairs the table as it operates, even under adversarial churn.
+
+---
+
+### 9.3 Why High‑Churn Workloads Need RTOA
+
+In real systems, the silent performance killer is **fragmentation**, not probe count.  
+Write‑heavy workloads naturally induce:
+
+- scattered deletions  
+- non‑contiguous free space  
+- loss of spatial locality  
+- long‑term drift of hot keys into cold memory regions
+
+RTOA directly addresses this by:
+
+- keeping Tier‑1 saturated with high‑value, frequently accessed keys  
+- draining Tier‑2 whenever deletions create opportunities  
+- preventing the “entropy ratchet” that plagues static schemes  
+- maintaining cache‑aligned locality over long runtimes
+
+This makes RTOA uniquely suited for:
+
+- 24/7 mail transport systems  
+- high‑frequency packet inspection  
+- telemetry ingestion at cloud scale  
+- CDN request routing  
+- any system where **data is constantly changing**
+
+---
+
+### 9.4 Systems‑Level Interpretation
+
+RTOA aligns with the architectural realities of large‑scale systems:
+
+- cache‑line locality dominates latency  
+- high churn is the norm  
+- tiered memory mirrors RTOA’s design  
+- repatriation behaves like real‑time compaction and promotion
+
+Thus, RTOA is not merely a theoretical generalization of open addressing; it is a **practical, hierarchy‑aware, self‑healing hash table** designed for the dominant workload patterns in modern data‑center environments.
+
+---
+
+## 10. Future Work
 Further investigation is required regarding:
 1.  **Dynamic Window Sizing:** Adapting $\omega$ at runtime based on detected cache-miss penalties.
 2.  **Multi-Tier Scaling:** Extending the model to include NUMA-aware tiers for distributed memory environments.
 
 ---
 
-## 10. Conclusion
+## 11. Conclusion
 RTOA bridges the gap between mathematical proofs and physical execution. By treating "No Reordering" as a theoretical lower bound rather than an operational requirement, RTOA achieves a hardware-optimal implementation that maintains L3 cache locality even at extreme occupancy and adversarial clustering.
