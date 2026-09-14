@@ -212,6 +212,13 @@ Further investigation is required regarding:
 2.  **Multi-Tier Scaling:** Extending the model to include NUMA-aware tiers for distributed memory environments.
 3.  Automated Single-Query Hardware Concurrency Scaling: Automating the worker matrix initialization phase through runtime hardware discovery (e.g., leveraging environment core-count enumeration such as `navigator.hardwareConcurrency`), allowing the execution architecture to dynamically self-scale its interleaved stride math to the logical core count of the host machine while maintaining isolated forensic schema logging.
 
+4.  Future Work: Native Systems and Hypervisor Migration Roadmap
+
+While the RTOA model has been fully validated through high-speed user-space HTML/JavaScript simulation testbeds, its long-term deployment trajectory spans several systems-level research directions:
+
+1. **Native Low-Overhead Production Ports:** Future engineering branches will focus on native implementations using modern concurrent and systems languages such as Go and Zig. Specifically, a port in Zig enables explicit, hardware-direct memory layout control with zero hidden runtime overhead, while a Go implementation provides an ideal sandbox to evaluate how real-time compaction and vacuum loops mitigate runtime garbage collection pauses under sustained high-saturation states ($\alpha = 0.95$).
+2. **Kernel and Hypervisor Integration:** Beyond user-space data structures, the dynamic window pacing and repatriation rules can be adapted as a foundational sub-routine inside Type-1 microkernels or modern virtualization layers. By governing memory page promotion across physical NUMA nodes and local CPU cache pools, these self-healing compaction loops can be leveraged to prevent memory-bus and inter-core cache thrashing across large-scale distributed enterprise environments.
+
 ---
 
 ## 11. Conclusion
